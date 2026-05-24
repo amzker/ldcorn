@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[project]
+name = "ldcorn"
+version = "0.1.0"
+description = "master proxy and process manager for path-based routing across Uvicorn worker pools. "
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "amzker", email = "amzker@proton.me" }
+]
+license = {text = "MIT"}
+dependencies = [
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+examples = [
+    "fastapi",
+    "aiosqlite",
+    "scikit-learn",
+    "aiohttp",
+    "numpy",
+    "jinja2>=3.1.6",
+    "websockets",
+]
+
+[project.scripts]
+ldcorn = "ldcorn.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/amzker/ldcorn"
+Repository = "https://github.com/amzker/ldcorn"
+Issues = "https://github.com/amzker/ldcorn/issues"
+

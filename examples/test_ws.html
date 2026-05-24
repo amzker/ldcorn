@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Ldcorn WebSocket Test</title>
+</head>
+
+<body>
+    <h2>WebSocket Test</h2>
+    <div id="messages" style="height: 300px; overflow-y: scroll; border: 1px solid black; padding: 10px;"></div>
+    <input type="text" id="messageInput" placeholder="Type a message...">
+    <button onclick="sendMessage()">Send</button>
+
+    <h2>Stateful Counter Test</h2>
+    <button onclick="fetchCounter()">Get Counter</button>
+    <div id="counterResult"></div>
+
+    <script>
+        const ws = new WebSocket("ws://127.0.0.1:8000/ws");
+        const messagesDiv = document.getElementById("messages");
+
+        ws.onmessage = function (event) {
+            messagesDiv.innerHTML += `<p><strong>Server:</strong> ${event.data}</p>`;
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        };
+
+        ws.onopen = function () {
+            messagesDiv.innerHTML += "<p><em>Connected to Ldcorn WebSocket</em></p>";
+        };
+
+        function sendMessage() {
+            const input = document.getElementById("messageInput");
+            ws.send(input.value);
+            messagesDiv.innerHTML += `<p style="color: blue;"><strong>You:</strong> ${input.value}</p>`;
+            input.value = '';
+        }
+
+        async function fetchCounter() {
+            try {
+                const response = await fetch("http://127.0.0.1:8000/counter");
+                const data = await response.json();
+                document.getElementById("counterResult").innerHTML =
+                    `<p>Worker PID: ${data.worker_pid} | Counter: <strong>${data.counter}</strong></p>`;
+            } catch (err) {
+                console.error(err);
+            }
+        }
+    </script>
+</body>
+
+</html>
