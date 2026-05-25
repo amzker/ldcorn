@@ -36,6 +36,11 @@ class WorkerManager:
             except OSError:
                 pass
 
+    def print_worker_summary(self):
+        logger.info("Active worker topology:")
+        for group_name, sockets in self.group_sockets.items():
+            logger.info(f"  - [{group_name}]: {len(sockets)} worker(s)")
+
     async def start(self):
         self.running = True
         logger.info(f"Starting ldcorn workers, sockets in {self.temp_dir}")
@@ -51,7 +56,9 @@ class WorkerManager:
                     "group_name": group.name,
                     "app": group.app,
                     "sock_path": sock_path,
-                    "proc": proc
+                    "proc": proc,
+                    "restart_count": 0,
+                    "last_start_time": time.time()
                 })
         
         logger.info("Waiting for workers to initialize and bind to sockets...")
@@ -62,7 +69,7 @@ class WorkerManager:
             proc = info["proc"]
             while not os.path.exists(sock):
                 # Fail fast if the worker process has already crashed/exited
-                if proc.returncode is not None:
+                if proc is not None and proc.returncode is not None:
                     raise RuntimeError(
                         f"Worker process for group '{info['group_name']}' exited prematurely with code {proc.returncode}"
                     )
@@ -73,6 +80,7 @@ class WorkerManager:
                 await asyncio.sleep(0.1)
                     
         await asyncio.sleep(0.5)
+        self.print_worker_summary()
         
         self.monitor_task = asyncio.create_task(self._monitor_workers())
 
@@ -80,13 +88,62 @@ class WorkerManager:
         while self.running:
             try:
                 for info in list(self.worker_info):
-                    proc = info["proc"]
+                    proc = info.get("proc")
+                    
+                    if proc is None:
+                        # Waiting to respawn
+                        if time.time() >= info.get("respawn_after", 0):
+                            group = next((g for g in self.config.workers if g.name == info["group_name"]), None)
+                            if not group: continue
+                            
+                            log_level = getattr(group, "uvicorn_log_level", "info")
+                            try:
+                                new_proc = await self._spawn_worker(info["group_name"], info["app"], info["sock_path"], log_level)
+                                
+                                # Concurrency Guard Check:
+                                # If the manager stopped or a reload discarded this worker while we were yielding on _spawn_worker,
+                                # terminate the newly spawned process immediately so it does not leak as an orphan.
+                                if not self.running or info not in self.worker_info:
+                                    logger.warning(f"Monitor guard triggered: newly spawned worker {info['group_name']} is orphaned. Terminating...")
+                                    if new_proc.returncode is None:
+                                        try:
+                                            new_proc.send_signal(signal.SIGTERM)
+                                        except ProcessLookupError:
+                                            pass
+                                    asyncio.create_task(self._reap_process(new_proc, info["sock_path"]))
+                                    continue
+
+                                info["proc"] = new_proc
+                                info["last_start_time"] = time.time()
+                            except Exception as e:
+                                logger.error(f"Failed to spawn new worker process for group {info['group_name']}: {e}")
+                                # Retry later
+                                info["respawn_after"] = time.time() + 1.0
+                        continue
+
                     if proc.returncode is not None:
                         # Process died unexpectedly
-                        logger.warning(f"Worker {info['group_name']} (PID {proc.pid}) died with exit code {proc.returncode}. Respawning after 1s...")
+                        group = next((g for g in self.config.workers if g.name == info["group_name"]), None)
+                        max_restarts = getattr(group, "max_restarts_on_crash", 3) if group else 3
+                        restart_backoff = getattr(group, "restart_backoff_on_crash", 2.0) if group else 2.0
                         
-                        # CPU Protection delay
-                        await asyncio.sleep(1.0)
+                        # Reset counter if worker lived for a while (e.g. 60s)
+                        if time.time() - info.get("last_start_time", time.time()) > 60.0:
+                            info["restart_count"] = 0
+                            
+                        if info.get("restart_count", 0) >= max_restarts:
+                            logger.error(f"Worker {info['group_name']} has crashed {info.get('restart_count', 0)} times. Reached max_restarts. Giving up on this instance.")
+                            if os.path.exists(info["sock_path"]):
+                                try:
+                                    os.remove(info["sock_path"])
+                                except OSError:
+                                    pass
+                            info["proc"] = None
+                            info["respawn_after"] = float('inf')  # Never respawn
+                            continue
+                            
+                        backoff = restart_backoff * (2 ** info.get("restart_count", 0))
+                        logger.warning(f"Worker {info['group_name']} (PID {proc.pid}) died with exit code {proc.returncode}. Respawning after {backoff}s backoff (Attempt {info.get('restart_count', 0) + 1}/{max_restarts})...")
                         
                         # Unlink old socket synchronously to prevent Address already in use during respawn
                         if os.path.exists(info["sock_path"]):
@@ -97,28 +154,10 @@ class WorkerManager:
                                 
                         # Reap the dead process to prevent it from leaking as a zombie
                         asyncio.create_task(self._reap_process(proc))
-                        try:
-                            # Fetch current log level
-                            group = next((g for g in self.config.workers if g.name == info["group_name"]), None)
-                            log_level = getattr(group, "uvicorn_log_level", "info") if group else "info"
-                            new_proc = await self._spawn_worker(info["group_name"], info["app"], info["sock_path"], log_level)
-                        except Exception as e:
-                            logger.error(f"Failed to spawn new worker process for group {info['group_name']}: {e}")
-                            continue
                         
-                        # Concurrency Guard Check:
-                        # If the manager stopped or a reload discarded this worker while we were yielding on _spawn_worker,
-                        # terminate the newly spawned process immediately so it does not leak as an orphan.
-                        if not self.running or info not in self.worker_info:
-                            logger.warning(f"Monitor guard triggered: newly spawned worker {info['group_name']} is orphaned. Terminating...")
-                            if new_proc.returncode is None:
-                                try:
-                                    new_proc.send_signal(signal.SIGTERM)
-                                except Exception:
-                                    pass
-                                asyncio.create_task(self._reap_process(new_proc, info["sock_path"]))
-                        else:
-                            info["proc"] = new_proc
+                        info["proc"] = None
+                        info["respawn_after"] = time.time() + backoff
+                        info["restart_count"] = info.get("restart_count", 0) + 1
             except Exception as e:
                 logger.error(f"Unexpected error in monitor loop: {e}")
             
@@ -139,8 +178,8 @@ class WorkerManager:
             
         logger.info("Shutting down workers...")
         for info in self.worker_info:
-            proc = info["proc"]
-            if proc.returncode is None:
+            proc = info.get("proc")
+            if proc and proc.returncode is None:
                 try:
                     proc.send_signal(signal.SIGTERM)
                 except ProcessLookupError:
@@ -149,8 +188,9 @@ class WorkerManager:
         # Reap all processes
         reap_tasks = []
         for info in self.worker_info:
-            proc = info["proc"]
-            reap_tasks.append(proc.wait())
+            proc = info.get("proc")
+            if proc:
+                reap_tasks.append(proc.wait())
             
         if reap_tasks:
             try:
@@ -173,6 +213,11 @@ class WorkerManager:
         staging_group_sockets = {}
         preserved_info_ids = set()
         
+        new_group_names = {g.name for g in new_config.workers}
+        removed_groups = [name for name in old_group_sockets if name not in new_group_names]
+        for name in removed_groups:
+            logger.info(f"Worker group '{name}' was removed from config. Terminating its {len(old_group_sockets[name])} worker(s)...")
+        
         for group in new_config.workers:
             # If user explicitly opted out of reload AND this group previously existed
             if not group.reload_on_sighup and group.name in old_group_sockets:
@@ -192,10 +237,42 @@ class WorkerManager:
                 
                 for i in range(group.instances):
                     if i < len(old_sockets):
-                        # Preserve existing instance
-                        staging_group_sockets[group.name].append(old_sockets[i])
-                        staging_worker_info.append(old_infos[i])
-                        preserved_info_ids.add(id(old_infos[i]))
+                        old_info = old_infos[i]
+                        old_proc = old_info.get("proc")
+                        is_crashed = old_proc is None or old_proc.returncode is not None
+                        
+                        if not is_crashed:
+                            # Preserve healthy existing instance
+                            staging_group_sockets[group.name].append(old_sockets[i])
+                            staging_worker_info.append(old_info)
+                            preserved_info_ids.add(id(old_info))
+                        else:
+                            # Recover crashed/dead instance: spawn new process and reset crash count
+                            logger.info(f"Worker {group.name} instance {i} was crashed/dead. Spawning a new one to recover on reload.")
+                            
+                            # Prevent the background monitor loop from trying to respawn this concurrently!
+                            old_info["respawn_after"] = float('inf')
+                            
+                            sock_path = old_sockets[i]
+                            if os.path.exists(sock_path):
+                                try:
+                                    os.remove(sock_path)
+                                except OSError:
+                                    pass
+                            if old_proc:
+                                asyncio.create_task(self._reap_process(old_proc))
+                            
+                            log_level = getattr(group, "uvicorn_log_level", "info")
+                            proc = await self._spawn_worker(group.name, group.app, sock_path, log_level)
+                            staging_group_sockets[group.name].append(sock_path)
+                            staging_worker_info.append({
+                                "group_name": group.name,
+                                "app": group.app,
+                                "sock_path": sock_path,
+                                "proc": proc,
+                                "restart_count": 0,
+                                "last_start_time": time.time()
+                            })
                     else:
                         # Scale up: spawn new instance
                         sock_path = os.path.join(self.temp_dir, f"{group.name}_{uuid.uuid4().hex[:8]}.sock")
@@ -207,7 +284,9 @@ class WorkerManager:
                             "group_name": group.name,
                             "app": group.app,
                             "sock_path": sock_path,
-                            "proc": proc
+                            "proc": proc,
+                            "restart_count": 0,
+                            "last_start_time": time.time()
                         })
             else:
                 if group.name in old_group_sockets:
@@ -227,7 +306,9 @@ class WorkerManager:
                         "group_name": group.name,
                         "app": group.app,
                         "sock_path": sock_path,
-                        "proc": proc
+                        "proc": proc,
+                        "restart_count": 0,
+                        "last_start_time": time.time()
                     })
                 
         logger.info("Waiting for new workers to initialize and bind to sockets...")
@@ -240,7 +321,7 @@ class WorkerManager:
                     proc = info["proc"]
                     while not os.path.exists(sock):
                         # Fail fast if a new staging process has exited prematurely
-                        if proc.returncode is not None:
+                        if proc is not None and proc.returncode is not None:
                             raise RuntimeError(
                                 f"New worker process for group '{info['group_name']}' exited prematurely with code {proc.returncode}"
                             )
@@ -254,8 +335,8 @@ class WorkerManager:
             logger.error(f"ERROR during reload: {e}. Aborting reload and keeping previous workers running.")
             for info in staging_worker_info:
                 if id(info) not in preserved_info_ids:
-                    proc = info["proc"]
-                    if proc.returncode is None:
+                    proc = info.get("proc")
+                    if proc and proc.returncode is None:
                         try:
                             proc.send_signal(signal.SIGTERM)
                         except ProcessLookupError:
@@ -264,11 +345,12 @@ class WorkerManager:
             # Reap aborted staging processes
             for info in staging_worker_info:
                 if id(info) not in preserved_info_ids:
-                    proc = info["proc"]
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=5.0)
-                    except Exception:
-                        pass
+                    proc = info.get("proc")
+                    if proc:
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=5.0)
+                        except Exception:
+                            pass
                     if os.path.exists(info["sock_path"]):
                         try:
                             os.remove(info["sock_path"])
@@ -290,13 +372,21 @@ class WorkerManager:
         logger.info("New workers are online! Sending SIGTERM to old workers to gracefully finish active requests...")
         for info in old_worker_info:
             if id(info) not in preserved_info_ids:
-                proc = info["proc"]
-                if proc.returncode is None:
+                proc = info.get("proc")
+                if proc and proc.returncode is None:
                     try:
                         proc.send_signal(signal.SIGTERM)
                     except ProcessLookupError:
                         pass
-                # Spawn a background task to reap the old process cleanly and delete its socket
-                asyncio.create_task(self._reap_process(proc, info["sock_path"]))
-                        
+                if proc:
+                    # Spawn a background task to reap the old process cleanly and delete its socket
+                    asyncio.create_task(self._reap_process(proc, info["sock_path"]))
+                else:
+                    if os.path.exists(info["sock_path"]):
+                        try:
+                            os.remove(info["sock_path"])
+                        except OSError:
+                            pass
+                            
+        self.print_worker_summary()
         return self.group_sockets

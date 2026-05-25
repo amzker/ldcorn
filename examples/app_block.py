@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 import uuid
+import random
 import numpy as np
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -146,8 +147,10 @@ async def prime_endpoint(n: int):
             if isPrime:
                 primes.append(possiblePrime)
         return len(primes)
-        
+
     count = await asyncio.to_thread(calculate_primes, n)
+    random_time = random.uniform(1,3)
+    time.sleep(random_time) # well in real prod app this is not going be there at all, if it is then you have bigger problems , checkout loopsentry to find blocks (yes shameless selfpromotion)
     return {"worker_pid": pid, "primes_found": count, "limit": n}
 
 @app.get("/ml-pipeline/start")
@@ -156,6 +159,8 @@ async def ml_endpoint():
     
     result = await asyncio.to_thread(run_ml_prediction)
     result["worker_pid"] = pid
+    random_time = random.uniform(1,3)
+    time.sleep(random_time)
     
     return result
 

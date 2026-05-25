@@ -14,6 +14,8 @@ class WorkerGroup:
         routes: List of URL prefixes to route to this group (e.g. ['/api', '/ws'])
         reload_on_sighup: Whether to restart this worker group during SIGHUP. Set to False for heavy ML models or stateful workers.
         uvicorn_log_level: Uvicorn log level (e.g. 'info', 'warning', 'error', 'critical', etc.)
+        max_restarts_on_crash: Maximum number of times to restart a crashed worker before giving up.
+        restart_backoff_on_crash: Base backoff time in seconds for exponential backoff on crash.
     """
     name: str
     app: str
@@ -22,6 +24,8 @@ class WorkerGroup:
     routes: List[str] = field(default_factory=lambda: ["*"])
     reload_on_sighup: bool = True
     uvicorn_log_level: str = "info"
+    max_restarts_on_crash: int = 3
+    restart_backoff_on_crash: float = 2.0
 
 @dataclass
 class LdConfig:
