@@ -22,6 +22,11 @@ However, sometimes i get annoyed managing multiple deployments, dealing with cod
 
 ## Quickstart
 
+## Install
+```
+uv add ldcorn
+```
+
 **1. Create `ldconfig.py`**
 ```python
 from ldcorn.config import LdConfig, WorkerGroup
