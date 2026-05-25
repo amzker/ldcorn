@@ -13,7 +13,7 @@ However, sometimes i get annoyed managing multiple deployments, dealing with cod
 *Fair warning:* Avoid using this as a hack for state management. You should generally rely on Redis for that. However, if you really need to pin stateful connections (like WebSockets or in-memory counters) to a single dedicated worker, Ldcorn's path routing will absolutely let you do that. Check out the included examples for proof.
 
 ### Features
-- **Path-Based Routing:** Route specific endpoints (like `/ws` or `/heavy-compute`) to dedicated worker processes. Ldcorn uses **Longest Prefix Match** for routing. If multiple groups share routes of the exact same length, the tie-breaker is their top-to-bottom definition order in your `ldconfig.py`. *(Note: The upcoming `ldcorn-go` rewrite will also support cookie/header-based routing, but this pure-Python version intentionally opts out of those to avoid proxy overhead.)*
+- **Path-Based Routing:** Route specific endpoints (like `/ws` or `/heavy-compute`) to dedicated worker processes. Ldcorn uses **Longest Prefix Match** for routing. If multiple groups share routes of the exact same length, the tie-breaker is their top-to-bottom definition order in your `ldconfig.py`. 
 - **Max Requests Per Worker:** Built-in concurrency queuing. Limit specific workers to exactly `X` concurrent requests to avoid locking databases or overloading threads. Requests exceeding this limit will queue asynchronously and wait for an available slot in that specific group (they do *not* fail over to other groups).
 - **Zero-Downtime Hot Reloads:** Send `SIGHUP` to Ldcorn and it will elegantly spin up new workers, hot-swap the routing tables, and let the old workers gracefully finish their active requests. Zero dropped connections.
   - **Dynamic Scaling & Proxy Updates:** If you opt a worker out of SIGHUP reloads (`reload_on_sighup=False`), you can still edit your config to change its `routes` or `max_req_per_worker` and Ldcorn will instantly apply them at the proxy level without restarting the physical process!
@@ -192,7 +192,7 @@ while writing this doc i felt like i am underselling ldcorn so here is somewhat 
 i added this in both math and ml routes 
 ```python
     random_time = random.uniform(1,3)
-    time.sleep(random_time) # well in real prod app this is not going be there at all, if it is then you have bigger problems , checkout loopsentry to find blocks (yes shameless selfpromotion)
+    time.sleep(random_time) # well in real prod app this is not going be there at all, if it is then you have bigger problems , checkout loopsentry to find blocks.
     # common real-world blockers: sync ORMs (SQLAlchemy without async), requests library, legacy DB drivers, CPU-bound ML inference without to_thread, subprocess calls etc... or just some random running loop 
 ```
 
@@ -266,4 +266,4 @@ Ldcorn continued to serve Fast I/O at **950 req/s** and handled Database operati
 
 This is the entire point of Ldcorn. It trades a tiny bit of optimal performance in perfect scenarios for **architectural resilience** in messy, real-world production environments.
 
-NOTE: ALL OF THESE CAN BE REPRODUCED , look at /examples
+NOTE: All of these can be reproduced , look at /examples
