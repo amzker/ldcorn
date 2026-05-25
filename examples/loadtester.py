@@ -16,22 +16,13 @@ def parse_duration(d_str: str) -> int:
 async def fetch_endpoint(session: aiohttp.ClientSession, url: str, method: str = "GET", json_data: dict = None):
     start_time = time.time()
     try:
-        if method == "POST":
-            async with session.post(url, json=json_data, timeout=aiohttp.ClientTimeout(total=60)) as response:
-                try:
-                    body = await response.json()
-                except Exception:
-                    body = await response.text()
-                elapsed = time.time() - start_time
-                return response.status, elapsed, None, body
-        else:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as response:
-                try:
-                    body = await response.json()
-                except Exception:
-                    body = await response.text()
-                elapsed = time.time() - start_time
-                return response.status, elapsed, None, body
+        async with session.request(method, url, json=json_data, timeout=aiohttp.ClientTimeout(total=60)) as response:
+            try:
+                body = await response.json()
+            except Exception:
+                body = await response.text()
+            elapsed = time.time() - start_time
+            return response.status, elapsed, None, body
     except asyncio.TimeoutError:
         return 0, 0.0, "Timeout", None
     except aiohttp.ClientError as e:
@@ -228,6 +219,24 @@ async def main_async(requests: int, concurrency: int, duration_str: str):
             duration, 
             method="POST", 
             json_data_factory=lambda: {"name": f"User_{random.randint(100000, 999999)}"}
+        ),
+        load_test_endpoint(
+            "DB Upsert Endpoint", 
+            f"{base_url}/db/upsert", 
+            ml_requests, 
+            ml_concurrency, 
+            duration, 
+            method="POST", 
+            json_data_factory=lambda: {"user_id": f"uuid_{random.randint(1, 1000)}", "name": f"User_{random.randint(100000, 999999)}"}
+        ),
+        load_test_endpoint(
+            "DB Delete Endpoint", 
+            f"{base_url}/db/delete/dummy", 
+            ml_requests, 
+            ml_concurrency, 
+            duration, 
+            method="DELETE",
+            url_factory=lambda: f"{base_url}/db/delete/uuid_{random.randint(1, 1000)}"
         ),
         load_test_endpoint(
             "Math Prime Endpoint", 

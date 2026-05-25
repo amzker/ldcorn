@@ -5,7 +5,7 @@ config = LdConfig(
     workers=[
         WorkerGroup(
             name="default",
-            app="examples.app:app",
+            app="examples.app_block:app",
             instances=3,
             max_req_per_worker=0,
             routes=["*"],
@@ -16,7 +16,7 @@ config = LdConfig(
         ),
         WorkerGroup(
             name="ml",
-            app="examples.app:app",
+            app="examples.app_block:app",
             instances=1,
             max_req_per_worker=0,
             routes=["/ml-pipeline"],
@@ -27,7 +27,7 @@ config = LdConfig(
         ),
         WorkerGroup(
             name="math",
-            app="examples.app:app",
+            app="examples.app_block:app",
             instances=1,
             max_req_per_worker=0,
             routes=["/math"],
@@ -38,7 +38,7 @@ config = LdConfig(
         ),
         WorkerGroup(
             name="websocket_stateful",
-            app="examples.app:app",
+            app="examples.app_block:app",
             instances=1,
             max_req_per_worker=0,
             routes=["/ws", "/counter"],

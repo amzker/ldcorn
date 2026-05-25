@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ldcorn"
-version = "0.1.0"
+version = "0.1.2"
 description = "master proxy and process manager for path-based routing across Uvicorn worker pools. "
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,7 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 examples = [
     "fastapi",
-    "aiosqlite",
+    "motor",
     "scikit-learn",
     "aiohttp",
     "numpy",
